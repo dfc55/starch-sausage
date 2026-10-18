@@ -5,5 +5,20 @@ config.json
 __pycache__/
 *.pyc
 
-# 运行时生成的日志
+# IDE 配置
+.vscode/
+
+# 运行时生成的日志与进程文件
 *.log
+bot.pid
+
+# 运行数据（统计 / 记忆 / 屏蔽 / 自定义人设 / 语录 / 反馈），不提交
+stats.json
+memory.json
+blocklist.json
+presets.json
+quotes.json
+feedback.json
+
+# 插件私密配置（含 token），不提交
+electricity.json

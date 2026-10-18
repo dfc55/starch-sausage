@@ -5,5 +5,14 @@
     "api_key": "sk-你的LLM密钥",
     "base_url": "https://api.deepseek.com",
     "model": "deepseek-chat"
+  },
+  "system_prompt": "",
+  "temperature": 0.9,
+  "max_tokens": 512,
+  "max_history": 10,
+  "response_level": 3,
+  "pricing": {
+    "input": 1.0,
+    "output": 2.0
   }
 }
