@@ -1,0 +1,6 @@
+# 含密钥的本地配置，不要提交到仓库
+config.json
+
+# Python 缓存
+__pycache__/
+*.pyc

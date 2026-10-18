@@ -1,0 +1,9 @@
+{
+  "appid": "你的AppID",
+  "secret": "你的AppSecret",
+  "llm": {
+    "api_key": "sk-你的LLM密钥",
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-chat"
+  }
+}
