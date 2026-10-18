@@ -13,9 +13,11 @@
     3. 配置也可用环境变量覆盖：QQ_APPID / QQ_SECRET / DEEPSEEK_API_KEY / LLM_BASE_URL / LLM_MODEL。
 """
 
+import asyncio
 import json
 import os
 import re
+import sys
 from collections import defaultdict, deque
 
 import aiohttp
@@ -201,7 +203,24 @@ class MyClient(botpy.Client):
         await message.reply(content=reply)
 
 
+def _setup_utf8_console() -> None:
+    """让 Windows 控制台正确显示中文日志（botpy 日志为 UTF-8，而 cmd 默认 GBK）。"""
+    if os.name != "nt":
+        return
+    try:
+        os.system("chcp 65001 >nul")  # 切换控制台代码页为 UTF-8
+    except OSError:
+        pass
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except (AttributeError, ValueError):
+            pass
+
+
 if __name__ == "__main__":
+    _setup_utf8_console()
+
     if not APPID or not SECRET:
         raise SystemExit(
             "缺少 APPID / SECRET：请在 config.json 中填写，或设置环境变量 QQ_APPID / QQ_SECRET。\n"
@@ -210,6 +229,10 @@ if __name__ == "__main__":
     if not LLM_API_KEY:
         print("[提示] 未配置 LLM_API_KEY，将使用内置的温柔话术回复；"
               "在 config.json 的 llm.api_key 填入 Key 即可开启真正的聊天。")
+
+    # 兼容 Python 3.12+：botpy 在 Client.__init__ 里调用 asyncio.get_event_loop()，
+    # 而新版 Python 不再自动创建事件循环，需先手动创建并设置一个。
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
     # 开启需要监听的事件通道：群内 @ 消息 + 私聊消息
     intents = botpy.Intents(public_guild_messages=True, direct_message=True)
