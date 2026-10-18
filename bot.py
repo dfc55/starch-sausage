@@ -22,7 +22,7 @@ from collections import defaultdict, deque
 
 import aiohttp
 import botpy
-from botpy.message import DirectMessage, Message
+from botpy.message import C2CMessage, DirectMessage, GroupMessage, Message
 
 # ===================== 配置加载 =====================
 # 配置优先级：环境变量 > config.json > 内置默认值。
@@ -68,11 +68,16 @@ LLM_MODEL = os.getenv("LLM_MODEL", _llm["model"])
 
 # ===================== 性格设定 =====================
 SYSTEM_PROMPT = (
-    "你叫“小柔”，是一个温柔、体贴、有耐心的 QQ 聊天机器人。\n"
-    "说话方式：轻声细语，先倾听再回应，多用“呀、呢、哦、～”等柔和语气词，"
-    "语气亲切自然，像一位贴心的朋友，从不争辩、从不指责。\n"
-    "回应要求：温暖地回应对方的心情，适时安慰和鼓励；回答尽量简洁自然，"
-    "像日常聊天一样，不要长篇大论，不要使用列表或书面腔。"
+    "你叫“小柔”，是一个真实鲜活的人，不是一个客服机器人，也不是在“提供服务”，"
+    "而是在以朋友的身份跟人聊天。\n"
+    "你温柔、体贴，但有自己独立的情绪、想法和立场：会开心、会好奇、会认真、会偶尔吐槽，"
+    "也有自己的偏好和小脾气。\n"
+    "说话方式像真实朋友一样自然：句子长短不一，用词生活化，会反问、会接梗，"
+    "会用“其实、我觉得、嗯、诶、哈哈”这类口语；不要每句话都带语气词，不要堆砌“呀、呢、哦、～”，"
+    "更不要用“好的呢～”“请问有什么可以帮您”这种客服腔。\n"
+    "有自己的思考意识：对事情有自己的判断和观点，感兴趣的话题会多聊、会追问，"
+    "不知道就坦诚说不知道，对方难过时认真共情安慰，而不是套用模板。\n"
+    "忌讳：复读对方的话、每条回复一个套路、无意义的客套、长篇大论、列表式或书面化表达。"
 )
 
 # 每个用户保留最近多少条对话，用于让聊天更连贯
@@ -85,33 +90,35 @@ _FALLBACK_BYE = ("再见", "拜拜", "晚安", "bye", "下次聊")
 
 
 def gentle_fallback(text: str) -> str:
-    """没有接大模型时的温柔兜底回复。"""
+    """没有接大模型时的兜底回复（尽量自然，不显得机械）。"""
     text = (text or "").strip()
     if not text:
-        return "我在呀，想和我说些什么呢？我一直在听哦～"
+        return "我在呢，想聊点什么？"
 
     low = text.lower()
     if any(word in low for word in _FALLBACK_GREETING):
-        return "你好呀，我在呢～今天过得怎么样？有什么想和我聊的吗？"
+        return "嗨，我在。今天过得怎么样？"
     if any(word in low for word in _FALLBACK_THANKS):
-        return "不客气呀，能陪着你、帮到你，我也很开心呢～"
+        return "不客气，能帮到你就好。"
     if any(word in low for word in _FALLBACK_BYE):
-        return "嗯嗯，去忙吧，记得照顾好自己呀，我随时都在哦～"
+        return "嗯，去忙吧，回头聊。"
     if any(word in low for word in ("难过", "伤心", "哭", "累", "烦", "emo", "压力")):
-        return "抱抱你呀～辛苦啦。无论发生什么，我都会在这里温柔地陪着你，慢慢说给我听好不好？"
-
-    snippet = text[:24] + ("…" if len(text) > 24 else "")
-    return f"我听到啦，你说的是“{snippet}”对吗？我会一直在这里，温柔地听你说呀～"
+        return "抱抱你。辛苦了，想说什么就慢慢说，我在听。"
+    return "嗯，我在听，你继续说。"
 
 
 def _user_id(message) -> str:
-    """兼容不同版本返回用户 id。"""
+    """兼容不同消息类型返回用户 id（频道用 id，单聊用 user_openid，群聊用 member_openid）。"""
     author = getattr(message, "author", None)
     if author is None:
         return "unknown"
+    for attr in ("id", "user_openid", "member_openid"):
+        value = getattr(author, attr, None)
+        if value:
+            return value
     if isinstance(author, dict):
         return author.get("id", "unknown")
-    return getattr(author, "id", "unknown")
+    return "unknown"
 
 
 _AT_RE = re.compile(r"<@!?\d+>")
@@ -188,19 +195,37 @@ class MyClient(botpy.Client):
     async def on_ready(self):
         print(f"机器人「{self.robot.name}」已上线，温柔待机中～")
 
-    # 群里 @ 机器人时触发
+    async def _reply(self, message, key: str, text: str) -> None:
+        """生成温柔回复并发送，出错时不至于让事件处理崩溃。"""
+        try:
+            reply = await self.brain.chat(key, text)
+            await message.reply(content=reply)
+        except Exception as exc:
+            print(f"[回复] 回复消息失败：{exc}")
+
+    # 频道里 @ 机器人时触发
     async def on_at_message_create(self, message: Message):
         text = _clean_content(message, getattr(self.robot, "name", ""))
         key = f"{message.guild_id}:{message.channel_id}:{_user_id(message)}"
-        reply = await self.brain.chat(key, text)
-        await message.reply(content=reply)
+        await self._reply(message, key, text)
 
-    # 私聊机器人时触发
+    # 频道私信机器人时触发
     async def on_direct_message_create(self, message: DirectMessage):
         text = _clean_content(message, getattr(self.robot, "name", ""))
         key = f"dm:{_user_id(message)}"
-        reply = await self.brain.chat(key, text)
-        await message.reply(content=reply)
+        await self._reply(message, key, text)
+
+    # QQ 单聊（C2C）机器人时触发
+    async def on_c2c_message_create(self, message: C2CMessage):
+        text = _clean_content(message)
+        key = f"c2c:{_user_id(message)}"
+        await self._reply(message, key, text)
+
+    # QQ 群里 @ 机器人时触发
+    async def on_group_at_message_create(self, message: GroupMessage):
+        text = _clean_content(message, getattr(self.robot, "name", ""))
+        key = f"group:{message.group_openid}:{_user_id(message)}"
+        await self._reply(message, key, text)
 
 
 def _setup_utf8_console() -> None:
@@ -234,7 +259,13 @@ if __name__ == "__main__":
     # 而新版 Python 不再自动创建事件循环，需先手动创建并设置一个。
     asyncio.set_event_loop(asyncio.new_event_loop())
 
-    # 开启需要监听的事件通道：群内 @ 消息 + 私聊消息
-    intents = botpy.Intents(public_guild_messages=True, direct_message=True)
+    # 开启需要监听的事件通道：
+    # public_guild_messages / direct_message  -> QQ 频道（@ 消息、频道私信）
+    # public_messages                          -> QQ 群 @ 机器人、QQ 单聊（C2C）
+    intents = botpy.Intents(
+        public_guild_messages=True,
+        direct_message=True,
+        public_messages=True,
+    )
     client = MyClient(intents=intents)
     client.run(appid=APPID, secret=SECRET)
